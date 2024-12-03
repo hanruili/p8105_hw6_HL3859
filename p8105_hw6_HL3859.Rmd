@@ -9,6 +9,7 @@ output: github_document
 
 ```{r message=FALSE}
 library(p8105.datasets)
+library(tidyverse)
 library(dplyr)
 library(broom)
 library(purrr)
@@ -74,9 +75,68 @@ The distribution of the log of the product of the intercept and the tmin variabl
 
 # Problem 2
 
+```{r}
+homicide_df = 
+  read.csv("homicide-data.csv", na = c("","NA","Unknown")) |>
+  mutate(
+    city_state = paste(city, state, sep = ", "),
+    victim_age = as.numeric(victim_age),
+    solved = case_when(
+      disposition == "Closed without arrest" ~ 0,
+      disposition == "Open/No arrest" ~ 0,
+      disposition == "Closed by arrest" ~ 1)) |>
+  select(city_state, victim_age, victim_race, victim_sex, solved) |>
+  filter(!(city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL"))) |>
+  filter(victim_race %in% c("White", "Black"))
+```
 
+```{r}
+baltimore_df = 
+  homicide_df |>
+  filter(city_state == "Baltimore, MD")
 
+glm_model = glm(solved ~ victim_age + victim_sex + victim_race, 
+                 data = baltimore_df, 
+                 family = binomial)
 
+broom::tidy(glm_model, conf.int = TRUE) |>
+  mutate(odds_ratio = exp(estimate),
+         CI_lower = exp(conf.low),
+         CI_upper = exp(conf.high)) |>
+  select(term, estimate, odds_ratio, CI_lower, CI_upper) |>
+  knitr::kable(digits = 3)
+```
 
+```{r}
+get_or_ci =
+  function(city_data) {
+    model = glm(solved ~ victim_sex + victim_age + victim_race, 
+               data = city_data, 
+               family = binomial)
+    broom::tidy(model, conf.int = TRUE) |>
+  mutate(odds_ratio = exp(estimate),
+         CI_lower = exp(conf.low),
+         CI_upper = exp(conf.high)) |>
+  select(term, estimate, odds_ratio, CI_lower, CI_upper)
+}
+
+city_or_ci =
+  homicide_df |>
+  nest(data = -city_state) |>
+  mutate(model_results = map(data, get_or_ci)) |>
+  filter(!map_lgl(model_results, is.null)) |>
+  unnest(model_results)
+
+city_or_ci |>
+  filter(term == "victim_sexMale") |>
+  arrange(odds_ratio) |>
+  ggplot(aes(x = reorder(city_state, odds_ratio), y = odds_ratio)) +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) +
+  labs(title = "Adjusted Odds Ratios for Solving Homicides by City",
+       x = "City, State",
+       y = "Adjusted Odds Ratio") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
 
 
