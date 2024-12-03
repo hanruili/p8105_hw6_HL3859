@@ -5,8 +5,6 @@ date: "2024-12-02"
 output: github_document
 ---
 
-# Problem 1
-
 ```{r message=FALSE}
 library(p8105.datasets)
 library(tidyverse)
@@ -14,7 +12,13 @@ library(dplyr)
 library(broom)
 library(purrr)
 library(ggplot2)
+library(modelr)
+library(caret)
+```
 
+# Problem 1
+
+```{r}
 weather_df = 
   rnoaa::meteo_pull_monitors(
     c("USW00094728"),
@@ -138,5 +142,162 @@ city_or_ci |>
   theme_minimal() +
   theme(axis.text.x = element_text(angle = 90, hjust = 1))
 ```
+
+
+# Problem 3
+
+```{r}
+birthweight_df =
+  read.csv("birthweight.csv") |>
+  janitor::clean_names() |>
+  mutate(
+    babysex = factor(case_when(babysex == 1 ~ "male", 
+                               babysex == 2 ~ "female")),
+    malform = factor(case_when(malform == 0 ~ "absent", 
+                               malform == 1 ~ "present")),
+    frace = factor(case_when(frace == 1 ~ "White",
+                             frace == 2 ~ "Black",
+                             frace == 3 ~ "Asian",
+                             frace == 4 ~ "Puero Rican",
+                             frace == 8 ~ "Other",
+                             frace == 9 ~ "Unknown")),
+    mrace = factor(case_when(mrace == 1 ~ "White", 
+                             mrace == 2 ~ "Black",
+                             mrace == 3 ~ "Asian",
+                             mrace == 4 ~ "Puero Rican",
+                             mrace == 8 ~ "Other",
+                             mrace == 9 ~ "Unknown")))
+
+str(birthweight_df)
+
+missing_summary <- sapply(birthweight_df, function(x) sum(is.na(x)))
+print(missing_summary)
+```
+
+No missing data.
+
+**Proposed Regression Model for Birthweight**
+
+```{r}
+# Hypothesized important factors: gestational age, head circumference, length at birth, 
+# mother's weight gain, mother's age, and smoking during pregnancy.
+model_1 = lm(bwt ~ gaweeks + bhead + blength + wtgain + momage + smoken + fincome, data = birthweight_df)
+
+# Add predictions and residuals to the dataset
+birthweight_df =
+  birthweight_df |>
+  add_predictions(model_1, "predicted_bwt") |>
+  add_residuals(model_1, "residuals")
+
+# Plot residuals against fitted values to assess model fit
+birthweight_df |>
+  ggplot(aes(x = predicted_bwt, y = residuals)) +
+  geom_point(aes(size = residuals), alpha = 0.1) +
+  geom_smooth(method = "lm", se = FALSE) +
+  labs(title = "Residuals vs Fitted Values", 
+       x = "Fitted Values", 
+       y = "Residuals") +
+  theme_minimal()
+
+# Additional diagnostic plots
+# Density of residuals to check for normality
+birthweight_df |>
+ggplot(aes(x = residuals)) +
+  geom_density() +
+  labs(title = "Histogram of Residuals", 
+       x = "Residuals", 
+       y = "Density") +
+  theme_minimal()
+
+# Q-Q plot to check if residuals are normally distributed
+qqnorm(birthweight_df$residuals)
+qqline(birthweight_df$residuals, col = "red")
+```
+
+The residuals vs. fitted values plot shows that while the model fits most of the data well (with residuals clustered around zero), there are concerns regarding heteroscedasticity, especially for larger fitted values. This could indicate that the model fails to capture the relationship in higher birthweight observations effectively.
+
+The density plot and Q-Q plot indicate that residuals are roughly normally distributed, but with heavy tails. This means that while the model captures most of the data adequately, there are extreme observations that are not well-fitted.
+
+**Compare models**
+
+```{r}
+# Using length at birth and gestational age as predictors (main effects only)
+model_2 = lm(bwt ~ blength + gaweeks, data = birthweight_df)
+
+# Using head circumference, length, sex, and all interactions (including three-way interaction)
+model_3 = lm(bwt ~ bhead * blength * babysex, data = birthweight_df)
+
+model_1_df = 
+  birthweight_df |>
+  mutate(fitted = predict(model_1), 
+         residuals = residuals(model_1), 
+         model = "Model 1: Proposed Model")
+
+model_2_df = 
+  birthweight_df |>
+  mutate(fitted = predict(model_2), 
+         residuals = residuals(model_2), 
+         model = "Model 2: Length & Gestational Age")
+
+model_3_df = 
+  birthweight_df |>
+  mutate(fitted = predict(model_3), 
+         residuals = residuals(model_3), 
+         model = "Model 3: Head Circumference, Length, Sex & Interactions")
+
+combined_df = bind_rows(model_1_df, model_2_df, model_3_df)
+
+combined_df |>
+ggplot(aes(x = fitted, y = residuals)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Residuals vs Fitted Values for Each Model", 
+       x = "Fitted Values", 
+       y = "Residuals") +
+  facet_wrap(~ model, scales = "free") +
+  theme_minimal()
+```
+
+```{r warning=FALSE}
+set.seed(123)
+cv_data = crossv_mc(birthweight_df, 100)
+
+cv_results = 
+  cv_data |>
+  mutate(
+    model_1 = map(train, ~ lm(bwt ~ gaweeks + bhead + blength + wtgain + momage + 
+                                smoken + fincome, data = .x)),
+    model_2 = map(train, ~ lm(bwt ~ blength + gaweeks, data = .x)),
+    model_3 = map(train, ~ lm(bwt ~ bhead * blength * babysex, data = .x)),
+    rmse_1 = map2_dbl(model_1, test, ~ rmse(model = .x, data = .y)),
+    rmse_2 = map2_dbl(model_2, test, ~ rmse(model = .x, data = .y)),
+    rmse_3 = map2_dbl(model_3, test, ~ rmse(model = .x, data = .y))) |>
+  select(starts_with("rmse")) |>
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_") |>
+  mutate(model = fct_inorder(model))
+
+cv_results |>
+  ggplot(aes(x = model, y = rmse, group = model, fill = model)) +
+  geom_violin(alpha = 0.5) +
+  labs(title = "RMSE",
+       x = "Models",
+       y = "Value") +
+  theme_minimal()
+```
+
+* Model 1: The narrow spread suggests that Model 1 has more consistent prediction accuracy across different splits of the data. Its lower central RMSE implies that it generally performs better in terms of minimizing prediction error compared to the other models.
+
+* Model 2 (simple): The greater width of the distribution indicates that the model's prediction accuracy is more variable across the different cross-validation folds. The higher median RMSE suggests that the simpler model with fewer predictors does not fit the data well enough, resulting in consistently higher prediction errors. This model lacks the complexity needed to effectively capture the factors influencing birthweight, leading to poorer predictions.
+
+* Model 3 (complex): While Model 3 incorporates more complexity through interaction terms, this does not appear to significantly reduce RMSE compared to Model 1. The narrow spread indicates that Model 3 has relatively consistent performance, but the central RMSE value being similar or slightly higher than Model 1 suggests that the added interaction terms may not have provided much practical improvement, and possibly led to overfitting.
+
+Overall, Model 1 (my model) is the best model among the three, providing a good trade-off between complexity and performance. It achieves the lowest RMSE while maintaining consistency across the cross-validation folds.
+
+
+
 
 
