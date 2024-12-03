@@ -1,0 +1,82 @@
+---
+title: "p8105_hw6_HL3859"
+author: "Hanrui Li"
+date: "2024-12-02"
+output: github_document
+---
+
+# Problem 1
+
+```{r message=FALSE}
+library(p8105.datasets)
+library(dplyr)
+library(broom)
+library(purrr)
+library(ggplot2)
+
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+```{r}
+set.seed(1)
+
+bootstrap_results =
+  replicate(5000, {
+    boot_sample = weather_df[sample(1:nrow(weather_df), replace = TRUE), ]
+    model = lm(tmax ~ tmin, data = boot_sample)
+    model_tidy = tidy(model)
+    beta_0 = model_tidy$estimate[1]
+    beta_1 = model_tidy$estimate[2]
+    model_glance = glance(model)
+    r_squared = model_glance$r.squared
+    log_beta <- log(beta_0 * beta_1)
+    c(r_squared = r_squared, log_beta = log_beta)
+})
+
+bootstrap_df = data.frame(t(bootstrap_results))
+colnames(bootstrap_df) = c("r_squared", "log_beta")
+
+quantile(bootstrap_df$r_squared, probs = c(0.025, 0.975))
+
+ggplot(bootstrap_df, aes(x = r_squared)) +
+  geom_density() +
+  labs(title = "Distribution of Bootstrap R-squared Values", 
+       x = "R-squared Estimtate", 
+       y = "Density") +
+  theme_minimal()
+```
+
+The distribution of R-squared values from the bootstrap samples is approximately normal, centered around 0.91. The density curve suggests that most of the estimates are concentrated near 0.91, with a slight tail extending toward lower values. This indicates that the linear model explains a majority of the variance in the relationship between tmin and tmax.
+
+```{r}
+quantile(bootstrap_df$log_beta, probs = c(0.025, 0.975))
+
+ggplot(bootstrap_df, aes(x = log_beta)) +
+  geom_density() +
+  labs(title = "Distribution of Bootstrap Log(Intercept * tmin)", 
+       x = "Log(Intercept * tmin)",
+       y = "Density") +
+  theme_minimal()
+```
+
+The distribution of the log of the product of the intercept and the tmin variable is also approximately normal, with values centered around 2.0. The peak density indicates a high concentration of estimates around this value, and the distribution has a slight tail on the higher end. This suggests the log-transformed product of the intercept and tmin is consistent across the bootstrap samples.
+
+
+# Problem 2
+
+
+
+
+
+
+
